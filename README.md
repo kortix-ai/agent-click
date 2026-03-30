@@ -6,23 +6,6 @@ Click buttons, type text, read screens, drag files, move windows, just like how 
 
 Built in Rust. Works on macOS today — Windows and Linux support is underway.
 
-## Performance
-
-| Operation                   | Time  |
-| --------------------------- | ----- |
-| `focused`                   | 18ms  |
-| `move-window`               | 42ms  |
-| `find` by id                | 67ms  |
-| `click` (AXPress)           | 68ms  |
-| `text` extraction           | 90ms  |
-| `snapshot` Calculator       | 106ms |
-| `snapshot` Finder (depth 8) | 114ms |
-| `snapshot` Music            | 171ms |
-| CDP `text` (Slack)          | 20ms  |
-| CDP `scroll`                | 24ms  |
-| CDP `click` by ref          | 119ms |
-| CDP `snapshot` (Slack)      | 220ms |
-
 ## Installation
 
 ### From source
@@ -86,7 +69,7 @@ agent-click click @e5 --expect 'name="Done"' # click then verify element appeare
 ### Type
 
 ```bash
-agent-click type "hello" -s @e3               # type into element (AXSetValue, headless)
+agent-click type "hello" -s @e3               # type into element (AXSetValue)
 agent-click type "hello" -a Safari            # type into focused field (keyboard sim)
 agent-click type "hello" -s @e3 --append      # append without clearing
 agent-click type "hello" -s @e3 --submit      # type then press Return
@@ -107,7 +90,7 @@ agent-click key space -a Music                # play/pause
 ```bash
 agent-click scroll down -a Music              # scroll the main content area
 agent-click scroll down --amount 10 -a Music  # scroll more
-agent-click scroll-to @e42                    # scroll element into view (headless)
+agent-click scroll-to @e42                    # scroll element into view
 ```
 
 ### Drag
@@ -123,8 +106,8 @@ Drag uses smooth 20-step interpolation with easing — mimics natural mouse move
 ### Window management
 
 ```bash
-agent-click move-window -a Notes --x 100 --y 100    # move window (instant, headless)
-agent-click resize-window -a Notes --width 800 --height 600  # resize (instant, headless)
+agent-click move-window -a Notes --x 100 --y 100    # move window (instant)
+agent-click resize-window -a Notes --width 800 --height 600  # resize (instant)
 agent-click open Calculator --wait                   # launch and wait for ready
 agent-click screenshot -a Music --path shot.png      # screenshot an app
 agent-click screenshot --path full.png               # full screen
@@ -186,8 +169,6 @@ agent-click observe -a Calculator             # interactive TUI explorer
 
 Electron apps (Slack, Cursor, VS Code, Postman, Discord, Notion) get automatic CDP support. agent-click detects Electron apps, auto-relaunches them with a debug port, and connects via WebSocket.
 
-Everything runs headless — no window activation, no mouse, no focus stealing.
-
 ```bash
 agent-click text -a Slack                     # just works — auto-detects Electron
 agent-click snapshot -a Slack -i -c           # DOM tree merged with native shell
@@ -205,20 +186,6 @@ Override auto-detection:
 agent-click snapshot -a MyApp --cdp --cdp-port 9222   # force CDP with specific port
 agent-click snapshot -a Slack --no-cdp                 # disable CDP, use native only
 ```
-
-## Background-first
-
-| Action             | Native apps           | Electron (CDP) |
-| ------------------ | --------------------- | -------------- |
-| Click              | Headless (AXPress)    | Headless (JS)  |
-| Type               | Headless (AXSetValue) | Headless (JS)  |
-| Key                | Needs focus           | Headless (CDP) |
-| Scroll             | Needs focus           | Headless (JS)  |
-| Read text          | Headless              | Headless       |
-| Snapshot           | Headless              | Headless       |
-| Move/resize window | Headless (AXSet)      | Headless       |
-| Drag               | Needs focus           | —              |
-| Screenshot         | Needs window          | Needs window   |
 
 ## Output
 
