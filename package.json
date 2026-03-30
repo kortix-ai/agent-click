@@ -13,7 +13,6 @@
     "LICENSE"
   ],
   "scripts": {
-    "setup": "./scripts/setup.sh",
     "dev": "pnpm --filter docs dev",
     "build": "cd cli && cargo build --release",
     "build:debug": "cd cli && cargo build",
