@@ -94,6 +94,32 @@ impl MacOSPlatform {
 
         Ok(found)
     }
+
+    fn find_app_pids(&self, app_name: &str) -> Result<Vec<(i32, String)>> {
+        let lower = app_name.to_lowercase();
+        let apps = self.running_apps();
+        let mut matches: Vec<(i32, String)> = apps
+            .iter()
+            .filter(|(_, name)| name.to_lowercase() == lower)
+            .cloned()
+            .collect();
+
+        if matches.is_empty() {
+            matches = apps
+                .iter()
+                .filter(|(_, name)| name.to_lowercase().starts_with(&lower))
+                .cloned()
+                .collect();
+        }
+
+        if matches.is_empty() {
+            return Err(Error::ApplicationNotFound {
+                name: app_name.to_string(),
+            });
+        }
+
+        Ok(matches)
+    }
 }
 
 impl MacOSPlatform {
@@ -483,9 +509,25 @@ impl Platform for MacOSPlatform {
                 let mut args = vec!["-x".to_string()];
 
                 if let Some(ref app_name) = app {
-                    let window_id = get_window_id(app_name, self)?;
-                    args.push("-l".to_string());
-                    args.push(window_id.to_string());
+                    let window_ids = get_window_ids(app_name, self)?;
+                    let mut last_error = None;
+                    for window_id in window_ids {
+                        match capture_window_to_png(window_id, &output_path) {
+                            Ok(()) => {
+                                return Ok(ActionResult {
+                                    success: true,
+                                    message: Some(format!("screenshot saved to {output_path}")),
+                                    path: Some(output_path),
+                                    data: None,
+                                });
+                            }
+                            Err(error) => last_error = Some(error),
+                        }
+                    }
+
+                    return Err(last_error.unwrap_or_else(|| Error::PlatformError {
+                        message: format!("no capturable window found for {app_name}"),
+                    }));
                 }
 
                 args.push(output_path.clone());
@@ -538,10 +580,7 @@ impl Platform for MacOSPlatform {
 
     async fn windows(&self, app: Option<&str>) -> Result<Vec<WindowInfo>> {
         let apps = match app {
-            Some(name) => {
-                let pid = self.find_app_pid(name)?;
-                vec![(pid, name.to_string())]
-            }
+            Some(name) => self.find_app_pids(name)?,
             None => self.running_apps(),
         };
 
@@ -713,11 +752,15 @@ fn collect_text(node: &AccessibilityNode, parts: &mut Vec<String>) {
     }
 }
 
-fn get_window_id(app_name: &str, platform: &MacOSPlatform) -> Result<u32> {
+fn get_window_ids(app_name: &str, platform: &MacOSPlatform) -> Result<Vec<u32>> {
     use core_foundation::base::{CFType, TCFType};
     use core_foundation::string::CFString;
 
-    let pid = platform.find_app_pid(app_name)?;
+    let pids: Vec<i32> = platform
+        .find_app_pids(app_name)?
+        .into_iter()
+        .map(|(pid, _)| pid)
+        .collect();
     let info_list = unsafe { CGWindowListCopyWindowInfo(0, 0) };
     if info_list.is_null() {
         return Err(Error::PlatformError {
@@ -734,9 +777,10 @@ fn get_window_id(app_name: &str, platform: &MacOSPlatform) -> Result<u32> {
     let pid_key = CFString::new("kCGWindowOwnerPID");
     let id_key = CFString::new("kCGWindowNumber");
     let bounds_key = CFString::new("kCGWindowBounds");
+    let title_key = CFString::new("kCGWindowName");
+    let layer_key = CFString::new("kCGWindowLayer");
 
-    let mut best_id: Option<u32> = None;
-    let mut best_area: f64 = 0.0;
+    let mut candidates: Vec<(u32, f64, String)> = Vec::new();
 
     for i in 0..cf_array.len() {
         let Some(entry) = cf_array.get(i) else {
@@ -766,8 +810,30 @@ fn get_window_id(app_name: &str, platform: &MacOSPlatform) -> Result<u32> {
                 &mut win_pid as *mut i64 as *mut _,
             );
         }
-        if win_pid as i32 != pid {
+        if !pids.contains(&(win_pid as i32)) {
             continue;
+        }
+
+        let mut layer_value: *const std::ffi::c_void = std::ptr::null();
+        if unsafe {
+            core_foundation::dictionary::CFDictionaryGetValueIfPresent(
+                dict_ref,
+                layer_key.as_concrete_TypeRef() as *const _,
+                &mut layer_value,
+            )
+        } != 0
+        {
+            let mut layer: i64 = 0;
+            unsafe {
+                core_foundation::number::CFNumberGetValue(
+                    layer_value as core_foundation::number::CFNumberRef,
+                    core_foundation::number::kCFNumberSInt64Type,
+                    &mut layer as *mut i64 as *mut _,
+                );
+            }
+            if layer != 0 {
+                continue;
+            }
         }
 
         let mut bounds_value: *const std::ffi::c_void = std::ptr::null();
@@ -818,8 +884,7 @@ fn get_window_id(app_name: &str, platform: &MacOSPlatform) -> Result<u32> {
             );
         }
 
-        let area = (width * height) as f64;
-        if area <= best_area {
+        if width < 100 || height < 100 {
             continue;
         }
 
@@ -843,13 +908,119 @@ fn get_window_id(app_name: &str, platform: &MacOSPlatform) -> Result<u32> {
             );
         }
 
-        best_area = area;
-        best_id = Some(win_id as u32);
+        let mut title = String::new();
+        let mut title_value: *const std::ffi::c_void = std::ptr::null();
+        if unsafe {
+            core_foundation::dictionary::CFDictionaryGetValueIfPresent(
+                dict_ref,
+                title_key.as_concrete_TypeRef() as *const _,
+                &mut title_value,
+            )
+        } != 0
+        {
+            let title_ref = title_value as core_foundation::string::CFStringRef;
+            if !title_ref.is_null() {
+                title = unsafe { CFString::wrap_under_get_rule(title_ref) }.to_string();
+            }
+        }
+
+        candidates.push((win_id as u32, (width * height) as f64, title));
     }
 
-    best_id.ok_or_else(|| Error::PlatformError {
-        message: format!("no window found for {app_name}"),
+    if candidates.is_empty() {
+        return Err(Error::PlatformError {
+            message: format!("no window found for {app_name}"),
+        });
+    }
+
+    // If an app has multiple same-named helper/table windows (CoinPoker is one
+    // example), the old largest-window heuristic often selects the lobby. Prefer
+    // non-dashboard windows and, among plausible app windows, the smaller one.
+    // Single-window apps keep the previous behavior.
+    let mut filtered: Vec<(u32, f64, String)> = candidates
+        .iter()
+        .filter(|(_, _, title)| !title.to_lowercase().contains("dashboard"))
+        .cloned()
+        .collect();
+    if filtered.is_empty() {
+        filtered = candidates.clone();
+    }
+
+    if filtered.len() > 1 {
+        filtered.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    } else {
+        filtered.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    }
+
+    Ok(filtered.into_iter().map(|(id, _, _)| id).collect())
+}
+
+fn capture_window_to_png(window_id: u32, output_path: &str) -> Result<()> {
+    use core_foundation::base::{CFRelease, TCFType};
+    use core_foundation::string::CFString;
+    use core_foundation::url::CFURL;
+    use core_graphics::window::{
+        create_image, kCGWindowImageBestResolution, kCGWindowImageBoundsIgnoreFraming,
+        kCGWindowImageDefault, kCGWindowListOptionIncludingWindow,
+    };
+    use foreign_types::ForeignType;
+    use std::path::Path;
+
+    let window_bounds = unsafe { core_graphics::display::CGRectNull };
+    let image = create_image(
+        window_bounds,
+        kCGWindowListOptionIncludingWindow,
+        window_id,
+        kCGWindowImageBoundsIgnoreFraming | kCGWindowImageBestResolution,
+    )
+    .or_else(|| {
+        create_image(
+            window_bounds,
+            kCGWindowListOptionIncludingWindow,
+            window_id,
+            kCGWindowImageDefault,
+        )
     })
+    .ok_or_else(|| Error::PlatformError {
+        message: format!("failed to capture window {window_id}"),
+    })?;
+
+    let url = CFURL::from_path(Path::new(output_path), false).ok_or_else(|| {
+        Error::PlatformError {
+            message: format!("invalid screenshot path: {output_path}"),
+        }
+    })?;
+    let png_type = CFString::new("public.png");
+
+    let destination = unsafe {
+        CGImageDestinationCreateWithURL(
+            url.as_concrete_TypeRef(),
+            png_type.as_concrete_TypeRef(),
+            1,
+            std::ptr::null(),
+        )
+    };
+
+    if destination.is_null() {
+        return Err(Error::PlatformError {
+            message: format!("failed to create PNG destination: {output_path}"),
+        });
+    }
+
+    unsafe {
+        CGImageDestinationAddImage(destination, image.as_ptr(), std::ptr::null());
+    }
+
+    let ok = unsafe { CGImageDestinationFinalize(destination) != 0 };
+    unsafe { CFRelease(destination as *const _) };
+
+    if !ok {
+        return Err(Error::PlatformError {
+            message: format!("failed to write PNG screenshot: {output_path}"),
+        });
+    }
+
+    Ok(())
 }
 
 #[link(name = "CoreGraphics", kind = "framework")]
@@ -858,6 +1029,24 @@ extern "C" {
         option: u32,
         relative_to_window: u32,
     ) -> core_foundation::base::CFTypeRef;
+}
+
+type CGImageDestinationRef = *mut std::ffi::c_void;
+
+#[link(name = "ImageIO", kind = "framework")]
+extern "C" {
+    fn CGImageDestinationCreateWithURL(
+        url: core_foundation::url::CFURLRef,
+        type_identifier: core_foundation::string::CFStringRef,
+        count: usize,
+        options: core_foundation::dictionary::CFDictionaryRef,
+    ) -> CGImageDestinationRef;
+    fn CGImageDestinationAddImage(
+        destination: CGImageDestinationRef,
+        image: *mut core_graphics::sys::CGImage,
+        properties: core_foundation::dictionary::CFDictionaryRef,
+    );
+    fn CGImageDestinationFinalize(destination: CGImageDestinationRef) -> u8;
 }
 
 const SYSTEM_SERVICE_NAMES: &[&str] = &[
