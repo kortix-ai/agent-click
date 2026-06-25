@@ -179,9 +179,14 @@ pub async fn click(
     if let Some(ref app_name) = chain.first().app {
         platform.activate(app_name).await?;
     }
+    let selector = chain.first().app.as_ref().map(|_| Selector {
+        app: chain.first().app.clone(),
+        ..Selector::default()
+    });
+
     platform
         .perform(&Action::Click {
-            selector: None,
+            selector,
             coordinates: Some(center),
             button,
             count,

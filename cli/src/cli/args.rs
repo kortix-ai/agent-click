@@ -79,6 +79,9 @@ pub enum Command {
         /// Target application name
         #[arg(short, long)]
         app: Option<String>,
+        /// Target application process ID
+        #[arg(long, conflicts_with = "app")]
+        pid: Option<u32>,
         /// Max tree depth to traverse
         #[arg(short, long)]
         depth: Option<u32>,
@@ -99,6 +102,9 @@ pub enum Command {
         /// Target application name
         #[arg(short, long)]
         app: Option<String>,
+        /// Target application process ID
+        #[arg(long, conflicts_with = "app")]
+        pid: Option<u32>,
         /// Max tree depth to search
         #[arg(short, long)]
         depth: Option<u32>,
@@ -121,6 +127,9 @@ pub enum Command {
         /// Target application name
         #[arg(short, long)]
         app: Option<String>,
+        /// Target application process ID
+        #[arg(long, conflicts_with = "app")]
+        pid: Option<u32>,
         /// Click at X coordinate
         #[arg(long)]
         x: Option<f64>,
@@ -157,6 +166,9 @@ pub enum Command {
         /// Target application name
         #[arg(short, long)]
         app: Option<String>,
+        /// Target application process ID
+        #[arg(long, conflicts_with = "app")]
+        pid: Option<u32>,
         /// Press Return/Enter after typing
         #[arg(long)]
         submit: bool,
@@ -181,6 +193,9 @@ pub enum Command {
         /// Target application name
         #[arg(short, long)]
         app: Option<String>,
+        /// Target application process ID
+        #[arg(long, conflicts_with = "app")]
+        pid: Option<u32>,
         /// Verify this element appears after key press
         #[arg(long)]
         expect: Option<String>,
@@ -198,6 +213,9 @@ pub enum Command {
         /// Target application name
         #[arg(short, long)]
         app: Option<String>,
+        /// Target application process ID
+        #[arg(long, conflicts_with = "app")]
+        pid: Option<u32>,
     },
 
     /// Scroll within an app
@@ -216,6 +234,9 @@ pub enum Command {
         /// Target application name
         #[arg(short, long)]
         app: Option<String>,
+        /// Target application process ID
+        #[arg(long, conflicts_with = "app")]
+        pid: Option<u32>,
         /// Position mouse at this element before scrolling
         #[arg(long, name = "at")]
         at_selector: Option<String>,
@@ -233,6 +254,9 @@ pub enum Command {
         /// Target application name
         #[arg(short, long)]
         app: Option<String>,
+        /// Target application process ID
+        #[arg(long, conflicts_with = "app")]
+        pid: Option<u32>,
         /// Source X coordinate (if not using selector)
         #[arg(long)]
         from_x: Option<f64>,
@@ -292,6 +316,9 @@ pub enum Command {
         /// Target application name
         #[arg(short, long)]
         app: Option<String>,
+        /// Target application process ID
+        #[arg(long, conflicts_with = "app")]
+        pid: Option<u32>,
     },
 
     /// Launch an application
@@ -323,6 +350,9 @@ pub enum Command {
         /// Override the default app in the workflow
         #[arg(short, long)]
         app: Option<String>,
+        /// Override the default app with a process ID
+        #[arg(long, conflicts_with = "app")]
+        pid: Option<u32>,
         /// Validate without executing
         #[arg(long)]
         dry_run: bool,
@@ -336,6 +366,9 @@ pub enum Command {
         /// Target application name
         #[arg(short, long)]
         app: Option<String>,
+        /// Target application process ID
+        #[arg(long, conflicts_with = "app")]
+        pid: Option<u32>,
         /// Max tree depth [default: 10]
         #[arg(short, long, default_value = "10")]
         depth: u32,
@@ -358,6 +391,9 @@ pub enum Command {
         /// Target application name
         #[arg(short, long)]
         app: Option<String>,
+        /// Target application process ID
+        #[arg(long, conflicts_with = "app")]
+        pid: Option<u32>,
         /// Max tree depth
         #[arg(short, long)]
         depth: Option<u32>,
@@ -395,6 +431,9 @@ pub enum Command {
         /// Capture only this app's window
         #[arg(short, long)]
         app: Option<String>,
+        /// Capture only this process's window
+        #[arg(long, conflicts_with = "app")]
+        pid: Option<u32>,
     },
 
     /// List windows for an app
@@ -402,6 +441,9 @@ pub enum Command {
         /// Target application name
         #[arg(short, long)]
         app: Option<String>,
+        /// Target application process ID
+        #[arg(long, conflicts_with = "app")]
+        pid: Option<u32>,
     },
 
     /// Move an app's window to a position
@@ -410,6 +452,9 @@ pub enum Command {
         /// Target application name
         #[arg(short, long)]
         app: Option<String>,
+        /// Target application process ID
+        #[arg(long, conflicts_with = "app")]
+        pid: Option<u32>,
         /// X position
         #[arg(long)]
         x: f64,
@@ -424,6 +469,9 @@ pub enum Command {
         /// Target application name
         #[arg(short, long)]
         app: Option<String>,
+        /// Target application process ID
+        #[arg(long, conflicts_with = "app")]
+        pid: Option<u32>,
         /// Width
         #[arg(long)]
         width: f64,
@@ -442,6 +490,9 @@ pub enum Command {
         /// Target application name
         #[arg(short, long)]
         app: Option<String>,
+        /// Target application process ID
+        #[arg(long, conflicts_with = "app")]
+        pid: Option<u32>,
     },
 
     /// List running applications
