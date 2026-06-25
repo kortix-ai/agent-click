@@ -20,7 +20,8 @@ pub async fn run(
     timeout: Duration,
 ) -> Result<(), RunError> {
     match command {
-        Command::Tree { app, depth } => {
+        Command::Tree { app, pid, depth } => {
+            let app = app_target(app, pid);
             let tree = platform.tree(app.as_deref(), depth).await?;
             output.print(&tree);
         }
@@ -28,8 +29,10 @@ pub async fn run(
         Command::Find {
             selector,
             app,
+            pid,
             depth,
         } => {
+            let app = app_target(app, pid);
             let mut chain = actions::parse_selector_with_app(&selector, app.as_deref())?;
             if let Some(d) = depth {
                 chain.selectors[0].max_depth = Some(d);
@@ -38,7 +41,8 @@ pub async fn run(
             output.print(&results);
         }
 
-        Command::GetValue { selector, app } => {
+        Command::GetValue { selector, app, pid } => {
+            let app = app_target(app, pid);
             let chain = actions::parse_selector_with_app(&selector, app.as_deref())?;
             let node = actions::find_element(platform, &chain, timeout).await?;
             output.print(&node);
@@ -47,12 +51,14 @@ pub async fn run(
         Command::Click {
             selector,
             app,
+            pid,
             x,
             y,
             button,
             count,
             expect,
         } => {
+            let app = app_target(app, pid);
             let btn = parse_mouse_button(button.as_deref());
             let cnt = count.unwrap_or(1);
 
@@ -67,9 +73,10 @@ pub async fn run(
                 if let Some(ref app_name) = app {
                     platform.activate(app_name).await?;
                 }
+                let selector = app.as_ref().map(|app| Selector::new().with_app(app));
                 platform
                     .perform(&Action::Click {
-                        selector: None,
+                        selector,
                         coordinates,
                         button: btn,
                         count: cnt,
@@ -84,10 +91,12 @@ pub async fn run(
             text,
             selector,
             app,
+            pid,
             submit,
             append,
             expect,
         } => {
+            let app = app_target(app, pid);
             let result = if let Some(sel) = selector {
                 let chain = actions::parse_selector_with_app(&sel, app.as_deref())?;
                 actions::type_into(platform, &chain, &text, submit, timeout).await?
@@ -116,7 +125,13 @@ pub async fn run(
             output_or_expect(platform, result, expect, timeout, output).await?;
         }
 
-        Command::Key { key, app, expect } => {
+        Command::Key {
+            key,
+            app,
+            pid,
+            expect,
+        } => {
+            let app = app_target(app, pid);
             let result = platform.perform(&Action::KeyPress { key, app }).await?;
             output_or_expect(platform, result, expect, timeout, output).await?;
         }
@@ -125,11 +140,13 @@ pub async fn run(
             from,
             to,
             app,
+            pid,
             from_x,
             from_y,
             to_x,
             to_y,
         } => {
+            let app = app_target(app, pid);
             let from_point = if let Some(sel) = from {
                 let chain = actions::parse_selector_with_app(&sel, app.as_deref())?;
                 let node = actions::find_element(platform, &chain, timeout).await?;
@@ -181,7 +198,8 @@ pub async fn run(
             output.print(&result);
         }
 
-        Command::ScrollTo { selector, app } => {
+        Command::ScrollTo { selector, app, pid } => {
+            let app = app_target(app, pid);
             let chain = actions::parse_selector_with_app(&selector, app.as_deref())?;
             let node = actions::find_element(platform, &chain, timeout).await?;
             let sel = agent_computer_use_core::Selector {
@@ -216,13 +234,15 @@ pub async fn run(
             direction,
             amount,
             app,
+            pid,
             at_selector,
             expect,
         } => {
+            let app = app_target(app, pid);
             let dir = actions::parse_direction(&direction)?;
 
             if let Some(at_dsl) = at_selector {
-                let chain = actions::parse_selector(&at_dsl)?;
+                let chain = actions::parse_selector_with_app(&at_dsl, app.as_deref())?;
                 let node = actions::find_element(platform, &chain, timeout).await?;
                 let center =
                     node.center()
@@ -296,8 +316,10 @@ pub async fn run(
         Command::Run {
             file,
             app: cli_app,
+            pid,
             dry_run,
         } => {
+            let cli_app = app_target(cli_app, pid);
             let contents =
                 std::fs::read_to_string(&file).map_err(agent_computer_use_core::Error::Io)?;
             let wf: workflow::Workflow = serde_yaml::from_str(&contents).map_err(|e| {
@@ -328,19 +350,23 @@ pub async fn run(
 
         Command::Observe {
             app,
+            pid,
             depth,
             refresh,
         } => {
+            let app = app_target(app, pid);
             let refresh_interval = Duration::from_secs_f64(refresh);
             observe::run_observe(platform, app, depth, refresh_interval).await?;
         }
 
         Command::Snapshot {
             app,
+            pid,
             depth,
             interactive,
             compact,
         } => {
+            let app = app_target(app, pid);
             let tree = platform.tree(app.as_deref(), depth).await?;
             let result = snapshot::create_snapshot(&tree, app.as_deref(), interactive, compact);
             snapshot::save_refs(&result.refs, app.as_deref())?;
@@ -362,7 +388,8 @@ pub async fn run(
             output.print(&results);
         }
 
-        Command::Screenshot { path, app } => {
+        Command::Screenshot { path, app, pid } => {
+            let app = app_target(app, pid);
             let result = platform
                 .perform(&Action::Screenshot {
                     path,
@@ -372,14 +399,16 @@ pub async fn run(
             output.print(&result);
         }
 
-        Command::Windows { app } => {
+        Command::Windows { app, pid } => {
+            let app = app_target(app, pid);
             let windows = platform.windows(app.as_deref()).await?;
             output.print(&windows);
         }
 
-        Command::MoveWindow { app, x, y } => {
+        Command::MoveWindow { app, pid, x, y } => {
+            let app = app_target(app, pid);
             let app_name = app.ok_or_else(|| agent_computer_use_core::Error::PlatformError {
-                message: "move-window requires --app".into(),
+                message: "move-window requires --app or --pid".into(),
             })?;
             let moved = platform.move_window(&app_name, x, y).await?;
             output.print(&ActionResult {
@@ -394,9 +423,15 @@ pub async fn run(
             });
         }
 
-        Command::ResizeWindow { app, width, height } => {
+        Command::ResizeWindow {
+            app,
+            pid,
+            width,
+            height,
+        } => {
+            let app = app_target(app, pid);
             let app_name = app.ok_or_else(|| agent_computer_use_core::Error::PlatformError {
-                message: "resize-window requires --app".into(),
+                message: "resize-window requires --app or --pid".into(),
             })?;
             let resized = platform.resize_window(&app_name, width, height).await?;
             output.print(&ActionResult {
@@ -416,7 +451,8 @@ pub async fn run(
             output.print(&node);
         }
 
-        Command::Text { app } => {
+        Command::Text { app, pid } => {
+            let app = app_target(app, pid);
             let text = platform.text(app.as_deref()).await?;
             println!("{text}");
         }
@@ -463,6 +499,10 @@ fn parse_mouse_button(s: Option<&str>) -> MouseButton {
         Some("middle") => MouseButton::Middle,
         _ => MouseButton::Left,
     }
+}
+
+fn app_target(app: Option<String>, pid: Option<u32>) -> Option<String> {
+    pid.map(|pid| format!("pid:{pid}")).or(app)
 }
 
 async fn output_or_expect(

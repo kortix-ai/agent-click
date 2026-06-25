@@ -38,6 +38,11 @@ impl MacOSPlatform {
 
         ax::raise_window(pid);
 
+        if parse_pid_target(app_name).is_some() {
+            std::thread::sleep(Duration::from_millis(200));
+            return Ok(());
+        }
+
         let output = std::process::Command::new("osascript")
             .args([
                 "-e",
@@ -60,6 +65,10 @@ impl MacOSPlatform {
     }
 
     fn find_app_pid(&self, app_name: &str) -> Result<i32> {
+        if let Some(pid) = parse_pid_target(app_name) {
+            return Ok(pid);
+        }
+
         let lower = app_name.to_lowercase();
 
         {
@@ -96,6 +105,16 @@ impl MacOSPlatform {
     }
 
     fn find_app_pids(&self, app_name: &str) -> Result<Vec<(i32, String)>> {
+        if let Some(pid) = parse_pid_target(app_name) {
+            let name = self
+                .running_apps()
+                .into_iter()
+                .find(|(app_pid, _)| *app_pid == pid)
+                .map(|(_, name)| name)
+                .unwrap_or_else(|| app_name.to_string());
+            return Ok(vec![(pid, name)]);
+        }
+
         let lower = app_name.to_lowercase();
         let apps = self.running_apps();
         let mut matches: Vec<(i32, String)> = apps
@@ -120,6 +139,11 @@ impl MacOSPlatform {
 
         Ok(matches)
     }
+}
+
+fn parse_pid_target(app_name: &str) -> Option<i32> {
+    let pid = app_name.strip_prefix("pid:")?.parse::<i32>().ok()?;
+    (pid > 0).then_some(pid)
 }
 
 impl MacOSPlatform {
@@ -369,7 +393,13 @@ impl Platform for MacOSPlatform {
             Action::KeyPress { key, app } => {
                 match app {
                     Some(name) => {
-                        input::stealth_activate(name, || input::key_press(key))?;
+                        if let Some(pid) = parse_pid_target(name) {
+                            ax::raise_window(pid);
+                            std::thread::sleep(std::time::Duration::from_millis(100));
+                            input::key_press(key)?;
+                        } else {
+                            input::stealth_activate(name, || input::key_press(key))?;
+                        }
                     }
                     None => {
                         input::key_press(key)?;
@@ -985,11 +1015,10 @@ fn capture_window_to_png(window_id: u32, output_path: &str) -> Result<()> {
         message: format!("failed to capture window {window_id}"),
     })?;
 
-    let url = CFURL::from_path(Path::new(output_path), false).ok_or_else(|| {
-        Error::PlatformError {
+    let url =
+        CFURL::from_path(Path::new(output_path), false).ok_or_else(|| Error::PlatformError {
             message: format!("invalid screenshot path: {output_path}"),
-        }
-    })?;
+        })?;
     let png_type = CFString::new("public.png");
 
     let destination = unsafe {
