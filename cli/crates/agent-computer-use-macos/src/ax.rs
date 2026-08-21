@@ -399,6 +399,39 @@ fn cftype_to_string(value: core_foundation::base::CFTypeRef) -> Option<String> {
     }
 }
 
+fn cftype_to_value_string(value: core_foundation::base::CFTypeRef) -> Option<String> {
+    if let Some(string) = cftype_to_string(value) {
+        return Some(string);
+    }
+
+    if let Some(boolean) = cftype_to_bool(value) {
+        return Some(boolean.to_string());
+    }
+
+    if value.is_null() {
+        return None;
+    }
+
+    let type_id = unsafe { core_foundation::base::CFGetTypeID(value) };
+    if type_id != core_foundation::number::CFNumber::type_id() {
+        return None;
+    }
+
+    let number = unsafe {
+        core_foundation::number::CFNumber::wrap_under_get_rule(
+            value as core_foundation::number::CFNumberRef,
+        )
+    };
+    let is_float =
+        unsafe { core_foundation::number::CFNumberIsFloatType(number.as_concrete_TypeRef()) != 0 };
+
+    if is_float {
+        number.to_f64().map(|value| value.to_string())
+    } else {
+        number.to_i64().map(|value| value.to_string())
+    }
+}
+
 fn cftype_to_bool(value: core_foundation::base::CFTypeRef) -> Option<bool> {
     if value.is_null() {
         return None;
@@ -433,7 +466,7 @@ fn element_to_node_batch(
     let title = cftype_to_string(attrs[1]);
     let description = cftype_to_string(attrs[2]);
     let name = title.or(description.clone());
-    let value = cftype_to_string(attrs[3]);
+    let value = cftype_to_value_string(attrs[3]);
     let id = cftype_to_string(attrs[4]);
     let position = extract_position(attrs[5]);
     let size = extract_size(attrs[6]);
@@ -938,4 +971,42 @@ pub fn set_window_size(pid: i32, width: f64, height: f64) -> bool {
         release_element(*c);
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core_foundation::base::TCFType;
+    use core_foundation::number::CFNumber;
+
+    #[test]
+    fn converts_boolean_values_to_strings() {
+        assert_eq!(
+            cftype_to_value_string(
+                core_foundation::boolean::CFBoolean::true_value().as_CFTypeRef()
+            ),
+            Some("true".to_string())
+        );
+        assert_eq!(
+            cftype_to_value_string(
+                core_foundation::boolean::CFBoolean::false_value().as_CFTypeRef()
+            ),
+            Some("false".to_string())
+        );
+    }
+
+    #[test]
+    fn converts_numeric_values_to_strings() {
+        let integer = CFNumber::from(1_i64);
+        let decimal = CFNumber::from(1.5_f64);
+
+        assert_eq!(
+            cftype_to_value_string(integer.as_CFTypeRef()),
+            Some("1".to_string())
+        );
+        assert_eq!(
+            cftype_to_value_string(decimal.as_CFTypeRef()),
+            Some("1.5".to_string())
+        );
+    }
 }
