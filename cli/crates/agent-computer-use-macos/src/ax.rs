@@ -432,6 +432,41 @@ fn cftype_to_value_string(value: core_foundation::base::CFTypeRef) -> Option<Str
     }
 }
 
+fn get_value_attribute(element: AXUIElementRef, attribute: &str) -> Option<String> {
+    if element.is_null() {
+        return None;
+    }
+
+    let cf_attr = CFString::new(attribute);
+    let mut value: core_foundation::base::CFTypeRef = ptr::null_mut();
+    let result = unsafe {
+        AXUIElementCopyAttributeValue(element, cf_attr.as_concrete_TypeRef(), &mut value)
+    };
+
+    if result != AX_ERROR_SUCCESS || value.is_null() {
+        return None;
+    }
+
+    let _cf_type = unsafe { CFType::wrap_under_create_rule(value) };
+    cftype_to_value_string(value)
+}
+
+fn value_from_selected_state(role: &Role, is_selected: Option<bool>) -> Option<String> {
+    match role {
+        Role::CheckBox | Role::Switch => is_selected.map(|selected| selected.to_string()),
+        _ => None,
+    }
+}
+
+fn selected_value_for_role(element: AXUIElementRef, role: &Role) -> Option<String> {
+    match role {
+        Role::CheckBox | Role::Switch => {
+            value_from_selected_state(role, get_bool_attribute(element, "AXSelected"))
+        }
+        _ => None,
+    }
+}
+
 fn cftype_to_bool(value: core_foundation::base::CFTypeRef) -> Option<bool> {
     if value.is_null() {
         return None;
@@ -466,7 +501,8 @@ fn element_to_node_batch(
     let title = cftype_to_string(attrs[1]);
     let description = cftype_to_string(attrs[2]);
     let name = title.or(description.clone());
-    let value = cftype_to_value_string(attrs[3]);
+    let value =
+        cftype_to_value_string(attrs[3]).or_else(|| selected_value_for_role(element, &role));
     let id = cftype_to_string(attrs[4]);
     let position = extract_position(attrs[5]);
     let size = extract_size(attrs[6]);
@@ -504,7 +540,8 @@ fn element_to_node_slow(
     let role = map_role(&role_str);
     let name = get_string_attribute(element, "AXTitle")
         .or_else(|| get_string_attribute(element, "AXDescription"));
-    let value = get_string_attribute(element, "AXValue");
+    let value =
+        get_value_attribute(element, "AXValue").or_else(|| selected_value_for_role(element, &role));
     let description = get_string_attribute(element, "AXHelp");
     let id = get_string_attribute(element, "AXIdentifier");
     let position = get_position(element);
@@ -1008,5 +1045,18 @@ mod tests {
             cftype_to_value_string(decimal.as_CFTypeRef()),
             Some("1.5".to_string())
         );
+    }
+
+    #[test]
+    fn converts_checkbox_and_switch_selected_states_to_values() {
+        assert_eq!(
+            value_from_selected_state(&Role::CheckBox, Some(true)),
+            Some("true".to_string())
+        );
+        assert_eq!(
+            value_from_selected_state(&Role::Switch, Some(false)),
+            Some("false".to_string())
+        );
+        assert_eq!(value_from_selected_state(&Role::Button, Some(true)), None);
     }
 }
