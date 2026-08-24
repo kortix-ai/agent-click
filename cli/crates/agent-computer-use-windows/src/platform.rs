@@ -108,13 +108,62 @@ mod real {
         fn find_app_pid(&self, app_name: &str) -> Result<u32> {
             let app_lower = app_name.to_lowercase();
             let apps = self.list_processes()?;
+
             for (pid, name) in &apps {
+                tracing::debug!(
+                    "find_app_pid: checking pid={}, name={:?} against {:?}",
+                    pid,
+                    name,
+                    app_lower
+                );
+
                 if name.to_lowercase().contains(&app_lower) {
+                    tracing::debug!(
+                        "find_app_pid: matched app {:?} -> pid={}, name={:?}",
+                        app_name,
+                        pid,
+                        name
+                    );
                     return Ok(*pid);
                 }
             }
+
+            tracing::debug!("find_app_pid: no process matched app {:?}", app_name);
+
             Err(Error::ApplicationNotFound {
                 name: app_name.to_string(),
+            })
+        }
+        fn find_window_for_app(&self, app_name: &str) -> Result<HWND> {
+            // First try the application's own process.
+            if let Ok(pid) = self.find_app_pid(app_name) {
+                if let Some(hwnd) = find_window_for_pid(pid) {
+                    tracing::debug!(
+                        "find_window_for_app: found window for {:?} via pid={}",
+                        app_name,
+                        pid
+                    );
+                    return Ok(hwnd);
+                }
+
+                tracing::debug!(
+                    "find_window_for_app: process pid={} has no visible top-level window",
+                    pid
+                );
+            }
+
+            // UWP / Windows Store applications can have their visible window
+            // owned by ApplicationFrameHost.exe rather than the application process.
+            if let Some(hwnd) = find_window_by_title(app_name) {
+                tracing::debug!(
+                    "find_window_for_app: found window for {:?} by title",
+                    app_name
+                );
+                return Ok(hwnd);
+            }
+
+            Err(Error::PlatformError {
+                message: format!("no window found for '{app_name}'"),
             })
         }
 
@@ -273,15 +322,13 @@ mod real {
                         self.activate(app_name).await?;
                         std::thread::sleep(std::time::Duration::from_millis(100));
                         unsafe {
-                            let pid = self.find_app_pid(app_name)?;
-                            if let Some(hwnd) = find_window_for_pid(pid) {
-                                let mut rect = RECT::default();
-                                if GetWindowRect(hwnd, &mut rect).is_ok() {
-                                    let cx = (rect.left + rect.right) as f64 / 2.0;
-                                    let cy = (rect.top + rect.bottom) as f64 / 2.0;
-                                    input::move_mouse(Point { x: cx, y: cy })?;
-                                    std::thread::sleep(std::time::Duration::from_millis(20));
-                                }
+                            let hwnd = self.find_window_for_app(app_name)?;
+                            let mut rect = RECT::default();
+                            if GetWindowRect(hwnd, &mut rect).is_ok() {
+                                let cx = (rect.left + rect.right) as f64 / 2.0;
+                                let cy = (rect.top + rect.bottom) as f64 / 2.0;
+                                input::move_mouse(Point { x: cx, y: cy })?;
+                                std::thread::sleep(std::time::Duration::from_millis(20));
                             }
                         }
                     }
@@ -438,7 +485,6 @@ mod real {
         }
 
         async fn windows(&self, app: Option<&str>) -> Result<Vec<WindowInfo>> {
-            let target_pid = app.map(|name| self.find_app_pid(name)).transpose()?;
             let mut windows = Vec::new();
 
             let pid_to_name: HashMap<u32, String> = self.list_processes()?.into_iter().collect();
@@ -452,15 +498,37 @@ mod real {
                 )
                 .ok();
 
-                if let Some(pid) = target_pid {
-                    windows.retain(|w: &WindowInfo| w.pid == pid);
+                if let Some(app_name) = app {
+                    let app_normalized = app_name
+                        .chars()
+                        .filter(|c| !c.is_whitespace())
+                        .flat_map(|c| c.to_lowercase())
+                        .collect::<String>();
+
+                    windows.retain(|w: &WindowInfo| {
+                        let title_normalized = w
+                            .title
+                            .chars()
+                            .filter(|c| !c.is_whitespace())
+                            .flat_map(|c| c.to_lowercase())
+                            .collect::<String>();
+
+                        let pid_match = pid_to_name
+                            .get(&w.pid)
+                            .map(|name| name.to_lowercase().contains(&app_name.to_lowercase()))
+                            .unwrap_or(false);
+
+                        pid_match || title_normalized.contains(&app_normalized)
+                    });
                 }
 
                 for w in &mut windows {
                     if let Some(name) = pid_to_name.get(&w.pid) {
                         w.app = name.clone();
                     }
+
                     let hwnd = find_window_by_title(&w.title);
+
                     if let Some(h) = hwnd {
                         w.frontmost = Some(h == foreground);
                     }
@@ -480,10 +548,7 @@ mod real {
         }
 
         async fn activate(&self, app: &str) -> Result<()> {
-            let pid = self.find_app_pid(app)?;
-            let hwnd = find_window_for_pid(pid).ok_or_else(|| Error::PlatformError {
-                message: format!("no window found for '{app}'"),
-            })?;
+            let hwnd = self.find_window_for_app(app)?;
             force_foreground(hwnd);
             Ok(())
         }
@@ -529,13 +594,11 @@ mod real {
 
         async fn move_window(&self, app: &str, x: f64, y: f64) -> Result<bool> {
             unsafe {
-                let pid = self.find_app_pid(app)?;
-                let hwnd = find_window_for_pid(pid).ok_or_else(|| Error::PlatformError {
-                    message: format!("no window found for '{app}'"),
-                })?;
+                let hwnd = self.find_window_for_app(app)?;
 
                 let mut rect = RECT::default();
                 let _ = GetWindowRect(hwnd, &mut rect);
+
                 let width = rect.right - rect.left;
                 let height = rect.bottom - rect.top;
 
@@ -558,10 +621,7 @@ mod real {
 
         async fn resize_window(&self, app: &str, width: f64, height: f64) -> Result<bool> {
             unsafe {
-                let pid = self.find_app_pid(app)?;
-                let hwnd = find_window_for_pid(pid).ok_or_else(|| Error::PlatformError {
-                    message: format!("no window found for '{app}'"),
-                })?;
+                let hwnd = self.find_window_for_app(app)?;
 
                 let mut rect = RECT::default();
                 let _ = GetWindowRect(hwnd, &mut rect);
@@ -628,7 +688,6 @@ mod real {
         target_pid: u32,
         found: Option<HWND>,
     }
-
     fn find_window_for_pid(pid: u32) -> Option<HWND> {
         unsafe {
             let mut ctx = FindPidContext {
@@ -650,9 +709,20 @@ mod real {
         let mut window_pid = 0u32;
         GetWindowThreadProcessId(hwnd, Some(&mut window_pid));
 
-        if window_pid == ctx.target_pid && IsWindowVisible(hwnd).as_bool() {
+        if window_pid == ctx.target_pid {
+            let visible = IsWindowVisible(hwnd).as_bool();
             let style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
-            if style & WS_EX_TOOLWINDOW.0 == 0 {
+            let toolwindow = style & WS_EX_TOOLWINDOW.0 != 0;
+
+            tracing::debug!(
+                "find_window_for_pid: hwnd={:?}, pid={}, visible={}, toolwindow={}",
+                hwnd,
+                window_pid,
+                visible,
+                toolwindow
+            );
+
+            if visible && !toolwindow {
                 ctx.found = Some(hwnd);
                 return FALSE;
             }
